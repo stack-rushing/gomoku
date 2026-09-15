@@ -58,7 +58,7 @@ class MessageBuffer:
         return messages, failed_lines
 
     def clear(self) -> None:
-        self._buffer = ""
+        self._buffer = b""
 
     @property
     def is_empty(self) -> bool:
