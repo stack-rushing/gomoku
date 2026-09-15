@@ -27,6 +27,7 @@ class PlayerSession:
     last_ping: float = field(default_factory=time.time)
     restart_voted: bool = False
     connected: bool = True
+    send_lock: Any = field(default_factory=threading.Lock, repr=False)
 
 
 @dataclass
@@ -42,6 +43,7 @@ class Room:
     result: Optional[str] = None
     game_id: Optional[int] = None
     restart_votes: int = 0
+    empty_since: Optional[float] = None
 
     def is_full(self) -> bool:
         return len(self.players) >= MAX_PLAYERS_PER_ROOM
@@ -157,6 +159,7 @@ class RoomManager:
                 addr=addr,
             )
             room.players[session_id] = player
+            room.empty_since = None
 
             side_str = PLAYER_BLACK if side == BLACK else PLAYER_WHITE
             logger.info(
@@ -189,36 +192,65 @@ class RoomManager:
                 )
                 del room.players[session_id]
 
+            room.game.restart()
+            room.game_started = False
+            room.game_started_at = None
+            room.game_ended = False
+            room.game_ended_at = None
+            room.result = None
+            room.game_id = None
+            room.restart_votes = 0
+            for remaining_player in room.players.values():
+                remaining_player.restart_voted = False
+
             if room.is_empty():
-                if time.time() - room.created_at > EMPTY_ROOM_TTL:
-                    self.remove_room(room_id)
+                room.empty_since = time.time()
+            else:
+                next(iter(room.players.values())).side = BLACK
             return room
+
+    def cleanup_empty_rooms(self) -> None:
+        with self._lock:
+            now = time.time()
+            expired_room_ids = [
+                room_id
+                for room_id, room in self._rooms.items()
+                if room.is_empty()
+                and room.empty_since is not None
+                and now - room.empty_since >= EMPTY_ROOM_TTL
+            ]
+            for room_id in expired_room_ids:
+                del self._rooms[room_id]
+                logger.info(f"[Room] 删除过期空房间: {room_id}")
 
     def broadcast(self, room_id: str, message: dict, exclude_session_id: Optional[str] = None) -> None:
         with self._lock:
             room = self._rooms.get(room_id)
             if room is None:
                 return
-            self._broadcast_to_room(room, message, exclude_session_id)
+            recipients = [
+                (sid, player)
+                for sid, player in room.players.items()
+                if sid != exclude_session_id and player.connected
+            ]
+        self._broadcast_to_players(recipients, message)
 
-    def _broadcast_to_room(
+    def _broadcast_to_players(
         self,
-        room: Room,
+        recipients: List[Tuple[str, PlayerSession]],
         message: dict,
-        exclude_session_id: Optional[str] = None,
     ) -> None:
         from common.protocol import encode_message
         from server.tcp_server import SafeConnection
 
         data = encode_message(message)
-        for sid, player in room.players.items():
-            if sid == exclude_session_id or not player.connected:
-                continue
+        for sid, player in recipients:
             try:
-                SafeConnection.send_safe(player.conn, data)
+                SafeConnection.send_safe(player.conn, data, player.send_lock)
             except Exception as e:
                 logger.error(f"[Broadcast] 发送失败 sid={sid}: {e}")
-                player.connected = False
+                with self._lock:
+                    player.connected = False
 
     def send_to_player(self, room_id: str, session_id: str, message: dict) -> bool:
         with self._lock:
@@ -229,16 +261,17 @@ class RoomManager:
             if player is None or not player.connected:
                 return False
 
-            from common.protocol import encode_message
-            from server.tcp_server import SafeConnection
+        from common.protocol import encode_message
+        from server.tcp_server import SafeConnection
 
-            try:
-                SafeConnection.send_safe(player.conn, encode_message(message))
-                return True
-            except Exception as e:
-                logger.error(f"[Send] 发送失败 sid={session_id}: {e}")
+        try:
+            SafeConnection.send_safe(player.conn, encode_message(message), player.send_lock)
+            return True
+        except Exception as e:
+            logger.error(f"[Send] 发送失败 sid={session_id}: {e}")
+            with self._lock:
                 player.connected = False
-                return False
+            return False
 
     def find_player_room(self, session_id: str) -> Optional[Room]:
         with self._lock:
