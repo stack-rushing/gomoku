@@ -55,6 +55,9 @@ class NetworkClient:
         self._ping_thread: Optional[threading.Thread] = None
         self._last_send_ping = 0.0
         self._buffer = MessageBuffer()
+        self.last_received_bytes = 0
+        self.last_received_at = 0.0
+        self.last_receive_error = ""
 
     def connect(self, host: str, port: int, timeout: float = 5.0) -> bool:
         self.disconnect()
@@ -182,16 +185,33 @@ class NetworkClient:
                 data = sock.recv(8192)
             except socket.timeout:
                 continue
-            except (ConnectionResetError, ConnectionAbortedError, OSError):
+            except (ConnectionResetError, ConnectionAbortedError, OSError) as e:
+                self.last_receive_error = str(e)
+                self._emit_event(
+                    EVENT_ERROR,
+                    {"type": "receive_failed", "message": self.last_receive_error},
+                )
                 break
 
             if not data:
                 break
 
-            self._buffer.feed(data)
-            messages, _ = self._buffer.extract_messages()
-            for msg in messages:
-                self._on_message(msg)
+            self.last_received_bytes = len(data)
+            self.last_received_at = time.time()
+            try:
+                self._buffer.feed(data)
+                messages, _ = self._buffer.extract_messages()
+                for msg in messages:
+                    self._on_message(msg)
+            except Exception as e:
+                # 不能让解析异常静默杀死接收线程，否则 socket 仍然存活，
+                # 服务器会一直“发送成功”而界面永久卡在匹配中。
+                self.last_receive_error = repr(e)
+                self._emit_event(
+                    EVENT_ERROR,
+                    {"type": "receive_failed", "message": f"消息处理失败: {e}"},
+                )
+                self._buffer.clear()
 
         self.disconnect()
 
