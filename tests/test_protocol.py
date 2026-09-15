@@ -118,6 +118,15 @@ class TestMessageBuffer(unittest.TestCase):
         buf.clear()
         self.assertTrue(buf.is_empty)
 
+    def test_clear_preserves_byte_buffer_for_next_message(self) -> None:
+        buf = MessageBuffer()
+        buf.feed(b'{"stale":true}')
+        buf.clear()
+        buf.feed(b'{"type":"room_joined"}\n')
+        messages, failed = buf.extract_messages()
+        self.assertEqual(messages, [{"type": "room_joined"}])
+        self.assertEqual(failed, [])
+
     def test_unicode_message(self) -> None:
         buf = MessageBuffer()
         buf.feed('{"name":"玩家黑"}'.encode("utf-8") + b"\n")
