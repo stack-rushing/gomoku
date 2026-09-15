@@ -36,7 +36,11 @@ def _make_handler(
             self.wfile.write(body)
 
         def _send_static(self, path: str) -> None:
-            full_path = os.path.join(WEB_DIR, path.lstrip("/"))
+            web_root = os.path.realpath(WEB_DIR)
+            full_path = os.path.realpath(os.path.join(web_root, path.lstrip("/")))
+            if os.path.commonpath((web_root, full_path)) != web_root:
+                self.send_error(403, "Forbidden")
+                return
             if not os.path.isfile(full_path):
                 self.send_error(404, "File not found")
                 return
