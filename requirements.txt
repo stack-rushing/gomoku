@@ -1,0 +1,5 @@
+# Gomoku Multiplayer Project Dependencies
+# Note: Most modules use Python standard library only.
+# PyInstaller is required only for packaging to EXE.
+
+pyinstaller>=5.13
