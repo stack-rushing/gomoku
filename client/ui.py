@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Callable, Optional
@@ -34,8 +35,8 @@ class GomokuClientUI:
         self.network = network
 
         self.root.title(APP_TITLE)
-        self.root.geometry("760x760")
-        self.root.minsize(720, 700)
+        self.root.geometry("760x820")
+        self.root.minsize(720, 780)
         self.root.configure(bg="#f1f5f9")
 
         self._setup_style()
@@ -53,6 +54,9 @@ class GomokuClientUI:
         self.local_game: Optional[GomokuGame] = None
         self._ai_pending: bool = False
         self._ai_player = GomokuAI()
+        self.current_view: str = LOGIN_VIEW
+        self._last_network_event: str = "-"
+        self._last_server_message: str = "-"
 
         self._login_vars: dict = {}
         self._build_login_view()
@@ -162,8 +166,6 @@ class GomokuClientUI:
 
         card = tk.Frame(outer, bg="#ffffff", highlightthickness=1, highlightbackground="#cbd5e1")
         card.pack(fill="x", expand=False)
-        card.pack_propagate(False)
-        card.configure(height=620)
 
         title_frame = tk.Frame(card, bg="#ffffff")
         title_frame.pack(fill="x", padx=32, pady=(32, 24))
@@ -225,7 +227,7 @@ class GomokuClientUI:
 
         self.join_btn = ttk.Button(
             btn_frame,
-            text="加入房间",
+            text="开始匹配",
             style="Primary.TButton",
             command=self._on_join_room,
         )
@@ -272,6 +274,13 @@ class GomokuClientUI:
             command=self._on_quit_room,
         )
         self.quit_btn.pack(side="right")
+
+        self.debug_btn = ttk.Button(
+            btns,
+            text="诊断",
+            command=self._show_diagnostics,
+        )
+        self.debug_btn.pack(side="right", padx=(0, 8))
 
         body = tk.Frame(self.game_frame, bg="#f1f5f9")
         body.pack(fill="both", expand=True, padx=20, pady=20)
@@ -395,6 +404,7 @@ class GomokuClientUI:
             self.white_tag_var = tag_var
 
     def _show_view(self, view: str) -> None:
+        self.current_view = view
         if view == LOGIN_VIEW:
             self.login_frame.lift()
         else:
@@ -416,10 +426,12 @@ class GomokuClientUI:
                 self._handle_server_message(msg)
         except Exception as e:
             self._log(f"UI poll error: {e}")
+            self._set_login_status(f"处理服务器消息失败: {e}")
 
     def _handle_network_event(self, event: dict) -> None:
         ev_type = event.get("type")
         payload = event.get("payload", {})
+        self._last_network_event = f"{ev_type}: {payload}"
 
         if ev_type == EVENT_CONNECTED:
             host = payload.get("host", "")
@@ -438,9 +450,15 @@ class GomokuClientUI:
             if etype == "connect_failed":
                 self._set_login_status(f"无法连接服务器: {msg}")
                 self._set_join_enabled(True)
+            elif etype == "send_failed":
+                self._set_login_status(f"发送匹配请求失败: {msg}")
+                self._set_join_enabled(True)
+            elif etype == "receive_failed":
+                self._set_login_status(f"接收服务器消息失败: {msg}")
 
     def _handle_server_message(self, msg: dict) -> None:
         msg_type = msg.get("type")
+        self._last_server_message = f"{msg_type}: {msg}"
         self._log(f"[Server] {msg_type}")
 
         if msg_type == "room_joined":
@@ -486,7 +504,7 @@ class GomokuClientUI:
         if ai_widget is not None:
             ai_widget.configure(state="readonly" if is_ai else "disabled")
         if hasattr(self, "join_btn"):
-            self.join_btn.config(text="开始 AI 对战" if is_ai else "加入房间")
+            self.join_btn.config(text="开始 AI 对战" if is_ai else "开始匹配")
 
     def _on_join_room(self) -> None:
         mode = self.mode_var.get()
@@ -523,12 +541,36 @@ class GomokuClientUI:
 
         self.player_name = name
         self.room_id = room
+        self.mode = "online"
 
-        self._log(f"连接服务器 {host}:{port}...")
-        self._set_login_status("连接服务器中...")
+        self._prepare_online_match_view()
+
+        self._log(f"开始匹配：连接服务器 {host}:{port}，房间={room}")
+        self._set_login_status("正在连接服务器...")
         ok = self.network.connect(host, port)
         if not ok and not self.network.connected:
             self._set_join_enabled(True)
+            self._return_to_login()
+
+    def _prepare_online_match_view(self) -> None:
+        self.my_side = 0
+        self.black_name = ""
+        self.white_name = ""
+        self.current_side = BLACK
+        self.game_ended = False
+        self.restart_waiting = False
+        self.room_label.config(text=self.room_id)
+        self.black_name_var.set("等待中")
+        self.white_name_var.set("等待中")
+        self.black_tag_var.set("")
+        self.white_tag_var.set("")
+        self.board.clear_board()
+        self.board.set_my_side(0)
+        self.board.set_current_side(BLACK)
+        self.board.set_enabled(False)
+        self.turn_var.set("匹配中")
+        self.status_var.set("正在匹配房间，请等待...")
+        self._show_view(GAME_VIEW)
 
     def _start_ai_game(self) -> None:
         name = self._login_vars["name"].get().strip()
@@ -665,8 +707,8 @@ class GomokuClientUI:
     def _do_join_room(self) -> None:
         if not self.room_id or not self.player_name:
             return
-        self._log(f"加入房间 {self.room_id} 名称={self.player_name}")
-        self._set_login_status("加入房间中...")
+        self._log(f"已连接服务器，正在匹配房间 {self.room_id}")
+        self._set_login_status("正在发送匹配请求...")
         ok = self.network.join_room(self.room_id, self.player_name)
         if not ok:
             self._set_login_status("加入房间失败")
@@ -687,8 +729,8 @@ class GomokuClientUI:
             self.white_name_var.set(self.player_name)
             self.white_tag_var.set("（我）")
 
-        self.status_var.set("等待对手加入...")
-        self.turn_var.set("等待中")
+        self.status_var.set("已进入房间，正在等待另一名玩家匹配...")
+        self.turn_var.set("匹配中")
         self.game_ended = False
         self.restart_waiting = False
         self.board.set_my_side(self.my_side)
@@ -705,23 +747,36 @@ class GomokuClientUI:
         self.network.disconnect()
 
     def _on_game_start(self, msg: dict) -> None:
+        if self.my_side not in (BLACK, WHITE):
+            your_side = msg.get("your_side", "")
+            if your_side == "black":
+                self.my_side = BLACK
+            elif your_side == "white":
+                self.my_side = WHITE
+            self.board.set_my_side(self.my_side)
+
+        if self.my_side not in (BLACK, WHITE):
+            self._log("收到开局消息，但尚未确认玩家棋色")
+            self._set_login_status("匹配状态异常，请重新开始匹配")
+            return
+
         self.black_name = msg.get("black", "")
         self.white_name = msg.get("white", "")
+        self.black_name_var.set(self.black_name)
+        self.white_name_var.set(self.white_name)
+        self.black_tag_var.set("（我）" if self.my_side == BLACK else "")
+        self.white_tag_var.set("（我）" if self.my_side == WHITE else "")
         cp = msg.get("current_player", "black")
         self.current_side = 1 if cp == "black" else 2
         self.game_ended = False
         self.restart_waiting = False
 
-        if self.my_side == 1:
-            self.white_name_var.set(self.white_name)
-        else:
-            self.black_name_var.set(self.black_name)
-
-        self._log(f"游戏开始！黑方={self.black_name} 白方={self.white_name}")
-        self.status_var.set("游戏进行中")
-        self._update_turn_label()
+        self._log(f"匹配成功！黑方={self.black_name} 白方={self.white_name}")
+        self.status_var.set("匹配成功，游戏开始")
         self.board.set_current_side(self.current_side)
         self.board.set_enabled(True)
+        self._show_view(GAME_VIEW)
+        self._update_turn_label()
 
     def _on_move_result(self, msg: dict) -> None:
         row = msg.get("row", -1)
@@ -878,6 +933,30 @@ class GomokuClientUI:
             self.status_label.config(text=text)
         except Exception:
             pass
+
+    def _show_diagnostics(self) -> None:
+        side_text = "未知"
+        if self.my_side == BLACK:
+            side_text = "黑方"
+        elif self.my_side == WHITE:
+            side_text = "白方"
+
+        current_text = "黑方" if self.current_side == BLACK else "白方"
+        info_lines = [
+            f"当前页面: {self.current_view}",
+            f"模式: {self.mode}",
+            f"房间号: {self.room_id or '-'}",
+            f"玩家名: {self.player_name or '-'}",
+            f"我的棋色: {side_text}",
+            f"当前回合: {current_text}",
+            f"网络连接: {'已连接' if self.network.connected else '未连接'}",
+            f"最近收到字节: {self.network.last_received_bytes or '-'}",
+            f"最近收包时间: {time.strftime('%H:%M:%S', time.localtime(self.network.last_received_at)) if self.network.last_received_at else '-'}",
+            f"接收线程错误: {self.network.last_receive_error or '-'}",
+            f"最近网络事件: {self._last_network_event}",
+            f"最近服务器消息: {self._last_server_message}",
+        ]
+        messagebox.showinfo("联机诊断信息", "\n".join(info_lines))
 
     def _update_turn_label(self) -> None:
         if self.game_ended:
