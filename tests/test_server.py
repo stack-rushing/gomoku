@@ -19,6 +19,7 @@ from common.protocol import (
     decode_message,
     encode_message,
 )
+from client.network import NetworkClient
 from server.database import Database
 from server.logger import logger
 from server.room_manager import RoomManager
@@ -117,6 +118,25 @@ class TestTCPServerIntegration(unittest.TestCase):
         finally:
             c.close()
 
+    def test_network_client_receives_room_joined(self) -> None:
+        client = NetworkClient()
+        try:
+            self.assertTrue(client.connect(TEST_HOST, self.port))
+            self.assertTrue(client.join_room("room_network_client", "NetworkClient"))
+            deadline = time.time() + 3
+            received = []
+            while time.time() < deadline and not received:
+                received.extend(client.poll_messages())
+                time.sleep(0.02)
+            self.assertTrue(
+                any(message.get("type") == "room_joined" for message in received),
+                f"messages={received}, events={client.poll_events()}, "
+                f"received_bytes={client.last_received_bytes}, "
+                f"receive_error={client.last_receive_error}",
+            )
+        finally:
+            client.disconnect()
+
     def test_two_clients_same_room_game_starts(self) -> None:
         c1 = TestClient()
         c2 = TestClient()
@@ -137,9 +157,11 @@ class TestTCPServerIntegration(unittest.TestCase):
             self.assertEqual(start_2["black"], "Alice")
             self.assertEqual(start_2["white"], "Bob")
             self.assertEqual(start_2["current_player"], "black")
+            self.assertEqual(start_2.get("your_side"), "white")
 
             start_1 = c1.recv_until_type("game_start", 3)
             self.assertIsNotNone(start_1)
+            self.assertEqual(start_1.get("your_side"), "black")
         finally:
             c1.close()
             c2.close()

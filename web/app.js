@@ -35,6 +35,12 @@
 
     function $(id) { return document.getElementById(id); }
 
+    function escapeHtml(value) {
+        return String(value == null ? "" : value).replace(/[&<>"']/g, function (char) {
+            return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char];
+        });
+    }
+
     async function getJSON(url) {
         const resp = await fetch(url, { method: "GET", cache: "no-store" });
         if (!resp.ok) throw new Error("HTTP " + resp.status);
@@ -78,7 +84,7 @@
                 return (
                     '<span class="player-chip side-' + p.side + '">' +
                     '<span class="dot"></span>' +
-                    (p.name || "匿名") +
+                    escapeHtml(p.name || "匿名") +
                     (p.connected ? "" : "（离线）") +
                     "</span>"
                 );
@@ -87,7 +93,7 @@
             return (
                 '<div class="room-item">' +
                     '<div class="room-top">' +
-                        '<span class="room-id">' + r.room_id + '</span>' +
+                        '<span class="room-id">' + escapeHtml(r.room_id) + '</span>' +
                         '<span class="state-tag ' + r.state + '">' + resultText(r.state) + '</span>' +
                     '</div>' +
                     '<div class="room-info">' +
@@ -118,8 +124,8 @@
             return (
                 '<div class="player-item">' +
                     '<div class="pi-left">' +
-                        '<span class="pi-name">' + (p.name || "匿名") + '</span>' +
-                        '<span class="pi-meta">房间: ' + (p.room_id || "-") +
+                        '<span class="pi-name">' + escapeHtml(p.name || "匿名") + '</span>' +
+                        '<span class="pi-meta">房间: ' + escapeHtml(p.room_id || "-") +
                             ' | ' + sideText +
                             ' | ' + (p.addr || "-") + ':' + (p.port || "-") +
                         '</span>' +
@@ -145,9 +151,9 @@
             return (
                 "<tr>" +
                     "<td>" + g.id + "</td>" +
-                    "<td>" + (g.room_id || "-") + "</td>" +
-                    "<td>" + (g.black_name || "-") + "</td>" +
-                    "<td>" + (g.white_name || "-") + "</td>" +
+                    "<td>" + escapeHtml(g.room_id || "-") + "</td>" +
+                    "<td>" + escapeHtml(g.black_name || "-") + "</td>" +
+                    "<td>" + escapeHtml(g.white_name || "-") + "</td>" +
                     "<td>" + formatTime(g.start_time) + "</td>" +
                     "<td>" + (g.move_count || 0) + "</td>" +
                     '<td class="' + resultClass(g.result) + '">' + resultText(g.result) + "</td>" +

@@ -12,6 +12,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from common.constants import BLACK, WHITE
+from server.config import EMPTY_ROOM_TTL
 from server.room_manager import Room, RoomManager
 
 
@@ -109,6 +110,26 @@ class TestRoomManager(unittest.TestCase):
         sid = p1.session_id
         self.rm.leave_room("R7", sid)
         self.assertNotIn(sid, room.players)
+
+    def test_leave_resets_game_and_reassigns_remaining_player_black(self) -> None:
+        p1, room, _ = self.rm.join_room("R7b", "A", _fake_conn(), ("1", 1))
+        p2, room, _ = self.rm.join_room("R7b", "B", _fake_conn(), ("2", 2))
+        room.game.place(BLACK, 7, 7)
+        room.game.place(WHITE, 7, 8)
+        self.rm.leave_room("R7b", p1.session_id)
+        self.assertFalse(room.game_started)
+        self.assertEqual(room.game.board[7][7], 0)
+        self.assertEqual(room.players[p2.session_id].side, BLACK)
+        p3, room, started = self.rm.join_room("R7b", "C", _fake_conn(), ("3", 3))
+        self.assertEqual(p3.side, WHITE)
+        self.assertTrue(started)
+
+    def test_cleanup_removes_room_after_empty_ttl(self) -> None:
+        player, room, _ = self.rm.join_room("R7c", "A", _fake_conn(), ("1", 1))
+        self.rm.leave_room("R7c", player.session_id)
+        room.empty_since = time.time() - EMPTY_ROOM_TTL - 1
+        self.rm.cleanup_empty_rooms()
+        self.assertIsNone(self.rm.get_room("R7c"))
 
     def test_find_player_room(self) -> None:
         p, room, _ = self.rm.join_room("R8", "A", _fake_conn(), ("1", 1))

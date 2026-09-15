@@ -151,7 +151,7 @@ Gomoku/
 | 文件 | 作用 |
 | --- | --- |
 | `client/main.py` | 入口：组装 NetworkClient + UI，`root.mainloop()` |
-| `client/ui.py` | `GomokuClientUI`：选择联机或 AI 对战；负责登录、棋盘、AI 回合调度与联机消息轮询 |
+| `client/ui.py` | `GomokuClientUI`：选择联机或 AI 对战；负责登录、棋盘、AI 回合调度与联机消息轮询；游戏界面提供「诊断」按钮查看联机状态 |
 | `client/ai.py` | `GomokuAI`：优先赢棋和防守，并结合连子数、开放端和中心位置评估候选落子 |
 | `client/board.py` | `GomokuBoard`（继承 Canvas）：绘制棋盘/棋子/最后一步红框/鼠标悬停效果 |
 | `client/network.py` | `NetworkClient`：TCP 连接、独立 recv 线程、ping 线程、消息队列、事件队列 |
@@ -239,8 +239,8 @@ AI 当前采用局面评分策略：优先完成五连、阻止对手五连，�
 2. 两个客户端分别打开。
 3. 两个客户端的「服务器地址」和「端口」都填同一个服务器地址。
 4. 两个客户端的「房间号」填**完全相同**的字符串（比如 `123456`）。
-5. 第一个点击「加入房间」的玩家自动执黑，第二个执白。
-6. 两人都加入后服务器广播 `game_start`，游戏正式开始。
+5. 第一个点击「开始匹配」的玩家自动执黑，第二个执白；点击后客户端会先进入游戏界面显示「匹配中」。
+6. 两人都加入后服务器分别向双方**定向下发**带 `your_side` 字段的 `game_start`，游戏正式开始。
 
 ## 十二、局域网联机方法
 
@@ -284,7 +284,7 @@ AI 当前采用局面评分策略：优先完成五连、阻止对手五连，�
 | C→S | `join_room` | `room_id`, `player_name` | 加入房间 |
 | S→C | `room_joined` | `room_id`, `player` (`black\|white`) | 加入成功 |
 | S→C | `room_full` | — | 房间已满 |
-| S→C | `game_start` | `black`, `white`, `current_player` | 双方到齐，游戏开始 |
+| S→C | `game_start` | `black`, `white`, `current_player`, `your_side` (`black\|white`) | 双方到齐，按连接定向下发，`your_side` 告知本方棋色 |
 | C→S | `move` | `row`, `col` | 请求落子 |
 | S→C | `move_result` | `row`, `col`, `player`, `next_player` | 落子成功并广播 |
 | S→C | `invalid_move` | `reason` | 拒绝落子原因 |
@@ -301,12 +301,12 @@ AI 当前采用局面评分策略：优先完成五连、阻止对手五连，�
 
 `common/protocol.py` 中 `MessageBuffer` 的做法：
 
-1. 内部维护字符串缓冲区。
-2. 每次 `recv(bytes)` 追加到缓冲区。
-3. 用 `\n` 切割字符串，最后一段留作下次拼接。
-4. 逐段 `json.loads`：成功则加入消息列表，失败则加入失败行集合。
+1. 内部维护**字节（bytes）缓冲区**，`clear()` 也必须重置为 `b""`（不能写成空字符串，否则重连后首个包会触发 `str + bytes` 的 `TypeError`）。
+2. 每次 `recv(bytes)` 原样追加，**不在追加时解码**，避免 UTF-8 多字节字符（如中文玩家名）被 TCP 从字符中间拆包时解码失败。
+3. 用 `b"\n"` 切割字节串，最后一段（可能是半条消息或半个多字节字符）原样留作下次拼接。
+4. 逐段 UTF-8 解码后再 `json.loads`：成功则加入消息列表，失败则加入失败行集合。
 
-保证无论 TCP 如何分片都能正确还原 JSON 消息序列。
+保证无论 TCP 如何分片（包括汉字多字节字符恰好从中间断开）都能正确还原 JSON 消息序列。
 
 ## 十五、五子棋胜负判断算法
 
@@ -519,14 +519,25 @@ GomokuServer.exe
 
 请确保 `root = tk.Tk()` 放在**最前**、任何 Canvas / PhotoImage 创建之后再执行。本项目代码已正确排序，如自行改动请留意。
 
+### Q8：服务器日志显示已连上、消息已发送，客户端却一直停在「匹配中」
+
+这是 2026-09-15 修复的客户端 bug（详见「二十五、更新记录」）：旧版 `MessageBuffer.clear()` 把字节缓冲区重置成了空字符串，接收线程收到首个 `pong` 包就崩溃退出，但 Socket 仍然存活，所以服务器侧一切正常、客户端永远收不到 `game_start`。
+
+排查方式：进入游戏界面后点击右上角「诊断」按钮，查看「最近收包时间 / 接收线程错误 / 最近服务器消息」。
+
+解决方式：
+
+1. 直接运行源码：`python -m client.main`（源码已修复）。
+2. 使用 EXE：重新执行 `build\build_client.bat` 打包，并把**新的 `dist\Gomoku.exe` 重新发给每一台电脑**——旧 exe 内嵌的是修复前代码，不重新打包不会生效。
+
 ---
 
 ## 二十四、最终运行流程回顾
 
 1. 选择「AI 对战」时，客户端本地创建棋局；AI 执白或执黑并自动响应，棋局结束后可立即重开。
 2. 选择「联机对战」时，运行服务器（TCP 监听 8888，HTTP 监听 8080）。
-3. 两个客户端填写服务器地址、端口、昵称、相同房间号，点「加入房间」。
-4. 第一个玩家拿到 `black`，第二个玩家拿到 `white`，服务器广播 `game_start`。
+3. 两个客户端填写服务器地址、端口、昵称、相同房间号，点「开始匹配」，界面先进入「匹配中」等待页。
+4. 第一个玩家拿到 `black`，第二个玩家拿到 `white`，服务器向双方定向下发各自附带 `your_side` 的 `game_start`。
 5. 任何一方点击棋盘，客户端发送 `{"type":"move","row":x,"col":y}` 到服务器。
 6. 服务器检查：在房间？已开始？自己回合？坐标合法？空位置？→ 拒绝返回 `invalid_move`。
 7. 合法则服务器落子 → 判断胜负/和棋 → 切换回合 → 广播 `move_result` 给两个客户端。
@@ -534,5 +545,38 @@ GomokuServer.exe
 9. 联机模式下双方可随时点「重新开始」，服务器累计 2 票后重置棋盘并广播 `game_restart` + `game_start`。
 10. 任一客户端断开，服务器从 Socket 读到 EOF，清理玩家并向对方广播 `player_left`，同时把未结束对局记为「对方胜」。
 11. 管理面板每 3 秒刷新一次，管理员能看到全部房间/玩家/对局统计。
+
+---
+
+## 二十五、更新记录
+
+### 2026-09-15：修复联机成功但客户端一直停留在「匹配中」
+
+**现象**：两台客户端加入同一房间后，服务器日志一切正常（连接、加入房间、`room_joined`、`game_start` 均显示发送成功），但客户端界面不进入对局，一直显示「匹配中」。
+
+**根因**：旧版 `common/protocol.py` 的 `MessageBuffer.clear()` 把接收缓冲区错误重置成了空字符串 `""`（初始值和 `feed()` 用的都是字节 `bytes`）。客户端每次 `connect()` 都会先调用 `clear()`，接收线程随后收到服务器秒回的第一个 `pong` 包，执行 `"" + b"..."` 立即抛出 `TypeError`；该异常发生在接收线程内且无人捕获，线程静默退出，而 Socket 对象仍然存活——于是服务器侧连接不断、所有 `sendall` 都成功，客户端却再也收不到任何消息。
+
+**改动文件（共 7 个）**：
+
+| 文件 | 具体改动 |
+| --- | --- |
+| `common/protocol.py` | **核心修复**：`MessageBuffer.clear()` 由重置 `""` 改为重置 `b""`，消除 `str + bytes` 类型错误 |
+| `client/network.py` | 新增 `last_received_bytes` / `last_received_at` / `last_receive_error` 诊断字段；接收线程对 `feed` / 拆包 / 消息分发增加 `try/except`，解析异常通过事件队列上报 UI 并清空缓冲区继续运行，不再静默死亡造成「假在线」；收包异常事件增加 `receive_failed` 类型 |
+| `client/ui.py` | 补充缺失的 `import time`（修复点「诊断」按钮时报错）；联机点击「开始匹配」后立即进入游戏界面显示匹配状态（原按钮文案「加入房间」统一改为「开始匹配」）；`_on_game_start` 支持读取服务器新增的 `your_side` 字段确认棋色；修复对局双方玩家名显示；游戏界面右上角新增「诊断」按钮，可查看当前页面、模式、房间、棋色、回合、连接状态、最近收包字节/时间、接收线程错误、最近网络事件与服务器消息 |
+| `server/tcp_server.py` | 每个连接新增独立的 `_send_lock`，发送锁不再与状态 `RLock` 混用；`ClientHandler.send()` 返回 `bool` 并记录每条下发消息日志；`TCPServer` 新增 `send_to_session()` 按会话定向发送；开局与双方同意重开两处的 `game_start` 由房间广播改为按会话定向下发，并分别附带 `your_side=black/white` |
+| `server/room_manager.py` | `join_room()` 新增 `send_lock` 参数，`PlayerSession` 持有对应连接的发送锁，保证广播与单发共用同一把锁 |
+| `tests/test_protocol.py` | 新增回归用例 `test_clear_preserves_byte_buffer_for_next_message`：验证 `clear()` 后再收包可以正常解析 |
+| `tests/test_server.py` | 新增 `test_network_client_receives_room_joined`：使用真实 `NetworkClient` 端到端验证收包路径；`game_start` 集成用例增加双方 `your_side` 字段断言 |
+
+**验证结果**：
+
+- `python -m unittest discover -s tests` 全部 82 个用例通过。
+- 使用真实 Tk 界面客户端 + 原生 socket 模拟对手做端到端验证：双方均能收到 `room_joined` / `game_start`，界面从「匹配中」正确进入「当前回合：黑方」并可落子。
+
+**部署注意**：
+
+- 该问题是**纯客户端 bug**，服务器无需重启即可恢复（源码运行时）。
+- 使用 EXE 分发时，修复后必须重新执行 `build\build_client.bat` 打包，并把新的 `dist\Gomoku.exe` 拷贝给每台玩家电脑；2026-09-15 18:32 之前打包的旧 exe 内嵌的仍是带 bug 的代码。
+- 服务器侧的定向发送加固（`server/tcp_server.py`、`server/room_manager.py`）建议一并更新：重新打包 `GomokuServer.exe` 或用新源码重启服务器。
 
 ---
