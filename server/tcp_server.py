@@ -70,16 +70,20 @@ class ClientHandler:
         self.buffer = MessageBuffer()
         self.last_recv = time.time()
         self._lock = threading.RLock()
+        self._send_lock = threading.Lock()
 
-    def send(self, message: dict) -> None:
+    def send(self, message: dict) -> bool:
         with self._lock:
             if not self.running:
-                return
+                return False
             try:
-                SafeConnection.send_safe(self.conn, encode_message(message), self._lock)
+                SafeConnection.send_safe(self.conn, encode_message(message), self._send_lock)
+                logger.info(f"[TCP] 发送消息: addr={self.addr}, type={message.get('type')}")
+                return True
             except Exception as e:
                 logger.warning(f"[TCP] 发送失败 {self.addr}: {e}")
                 self.stop()
+                return False
 
     def stop(self) -> None:
         with self._lock:
@@ -175,7 +179,7 @@ class ClientHandler:
         db = self.server.database
 
         player, room, game_started = rm.join_room(
-            room_id, player_name, self.conn, self.addr
+            room_id, player_name, self.conn, self.addr, self._send_lock
         )
 
         if player is None:
@@ -199,10 +203,15 @@ class ClientHandler:
                     room_id, black.player_name, white.player_name, room.game_started_at
                 )
                 room.game_id = game_id
-                start_msg = build_game_start(
+                base_start_msg = build_game_start(
                     black.player_name, white.player_name, PLAYER_BLACK
                 )
-                rm.broadcast(room_id, start_msg)
+                black_start_msg = dict(base_start_msg)
+                black_start_msg["your_side"] = PLAYER_BLACK
+                white_start_msg = dict(base_start_msg)
+                white_start_msg["your_side"] = PLAYER_WHITE
+                self.server.send_to_session(black.session_id, black_start_msg)
+                self.server.send_to_session(white.session_id, white_start_msg)
 
     def _handle_move(self, msg: dict) -> None:
         if self.session_id is None or self.room_id is None:
@@ -317,10 +326,15 @@ class ClientHandler:
                         room.game_started_at,
                     )
                     room.game_id = game_id
-                    start_msg = build_game_start(
+                    base_start_msg = build_game_start(
                         black.player_name, white.player_name, PLAYER_BLACK
                     )
-                    rm.broadcast(self.room_id, start_msg)
+                    black_start_msg = dict(base_start_msg)
+                    black_start_msg["your_side"] = PLAYER_BLACK
+                    white_start_msg = dict(base_start_msg)
+                    white_start_msg["your_side"] = PLAYER_WHITE
+                    self.server.send_to_session(black.session_id, black_start_msg)
+                    self.server.send_to_session(white.session_id, white_start_msg)
 
     def _on_disconnect(self) -> None:
         if self.session_id:
@@ -366,6 +380,14 @@ class TCPServer:
     def unregister_session(self, session_id: str) -> None:
         with self._sessions_lock:
             self._sessions.pop(session_id, None)
+
+    def send_to_session(self, session_id: str, message: dict) -> bool:
+        with self._sessions_lock:
+            handler = self._sessions.get(session_id)
+        if handler is None:
+            logger.warning(f"[TCP] 无法发送消息，连接不存在: sid={session_id}")
+            return False
+        return handler.send(message)
 
     def get_session_count(self) -> int:
         with self._sessions_lock:
