@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Callable, Optional
 
+from client.ai import GomokuAI
 from client.board import GomokuBoard
 from client.config import (
     APP_TITLE,
@@ -19,6 +20,8 @@ from client.network import (
     EVENT_ERROR,
     NetworkClient,
 )
+from common.constants import BLACK, WHITE
+from server.game import GomokuGame
 
 
 LOGIN_VIEW = "login"
@@ -31,8 +34,8 @@ class GomokuClientUI:
         self.network = network
 
         self.root.title(APP_TITLE)
-        self.root.geometry("760x660")
-        self.root.minsize(720, 600)
+        self.root.geometry("760x760")
+        self.root.minsize(720, 700)
         self.root.configure(bg="#f1f5f9")
 
         self._setup_style()
@@ -40,11 +43,16 @@ class GomokuClientUI:
         self.room_id: str = ""
         self.player_name: str = ""
         self.my_side: int = 0
+        self.ai_side: int = 0
         self.black_name: str = ""
         self.white_name: str = ""
         self.current_side: int = 1
         self.game_ended: bool = False
         self.restart_waiting: bool = False
+        self.mode: str = "online"
+        self.local_game: Optional[GomokuGame] = None
+        self._ai_pending: bool = False
+        self._ai_player = GomokuAI()
 
         self._login_vars: dict = {}
         self._build_login_view()
@@ -155,12 +163,12 @@ class GomokuClientUI:
         card = tk.Frame(outer, bg="#ffffff", highlightthickness=1, highlightbackground="#cbd5e1")
         card.pack(fill="x", expand=False)
         card.pack_propagate(False)
-        card.configure(height=460)
+        card.configure(height=620)
 
         title_frame = tk.Frame(card, bg="#ffffff")
         title_frame.pack(fill="x", padx=32, pady=(32, 24))
         ttk.Label(title_frame, text="五子棋联机版", style="Title.TLabel", background="#ffffff").pack(anchor="w")
-        ttk.Label(title_frame, text="Gomoku Multiplayer — 输入房间号双人对战", style="SubTitle.TLabel", background="#ffffff").pack(anchor="w", pady=(4, 0))
+        ttk.Label(title_frame, text="选择联机对战或 AI 对战", style="SubTitle.TLabel", background="#ffffff").pack(anchor="w", pady=(4, 0))
 
         form = tk.Frame(card, bg="#ffffff")
         form.pack(fill="both", expand=True, padx=32, pady=0)
@@ -177,6 +185,38 @@ class GomokuClientUI:
         self._login_vars["port"] = add_field(form, "端口", "8888", 1)
         self._login_vars["name"] = add_field(form, "玩家名称", "Player", 2)
         self._login_vars["room"] = add_field(form, "房间号", "123456", 3)
+        self._online_field_widgets = [
+            widget
+            for row in (0, 1, 2, 3, 6, 7)
+            for widget in form.grid_slaves(row=row)
+        ]
+
+        mode_lbl = ttk.Label(form, text="对战方式", background="#ffffff")
+        mode_lbl.grid(row=8, column=0, sticky="w", pady=(0, 4))
+        self.mode_var = tk.StringVar(value="联机对战")
+        self._login_vars["mode"] = ttk.Combobox(
+            form,
+            width=34,
+            state="readonly",
+            values=["联机对战", "AI 对战"],
+            textvariable=self.mode_var,
+            font=("Microsoft YaHei", 11),
+        )
+        self._login_vars["mode"].grid(row=9, column=0, sticky="we", pady=(0, 12))
+        self._login_vars["mode"].bind("<<ComboboxSelected>>", lambda _event: self._sync_mode_ui())
+
+        ai_side_lbl = ttk.Label(form, text="AI 角色", background="#ffffff")
+        ai_side_lbl.grid(row=10, column=0, sticky="w", pady=(0, 4))
+        self.ai_side_var = tk.StringVar(value="我执黑")
+        self._login_vars["ai_side"] = ttk.Combobox(
+            form,
+            width=34,
+            state="readonly",
+            values=["我执黑", "我执白"],
+            textvariable=self.ai_side_var,
+            font=("Microsoft YaHei", 11),
+        )
+        self._login_vars["ai_side"].grid(row=11, column=0, sticky="we", pady=(0, 16))
 
         form.grid_columnconfigure(0, weight=1)
 
@@ -190,6 +230,8 @@ class GomokuClientUI:
             command=self._on_join_room,
         )
         self.join_btn.pack(side="right")
+
+        self._sync_mode_ui()
 
         self.status_label = ttk.Label(
             btn_frame,
@@ -426,7 +468,32 @@ class GomokuClientUI:
             self._log(f"服务器错误: {err_msg}")
             messagebox.showwarning("服务器提示", err_msg)
 
+    def _sync_mode_ui(self) -> None:
+        is_ai = self.mode_var.get() == "AI 对战"
+        for widget in self._online_field_widgets:
+            if is_ai:
+                widget.grid_remove()
+            else:
+                widget.grid()
+        for key in ("host", "port"):
+            widget = self._login_vars.get(key)
+            if widget is not None:
+                widget.configure(state="disabled" if is_ai else "normal")
+        room_widget = self._login_vars.get("room")
+        if room_widget is not None:
+            room_widget.configure(state="disabled" if is_ai else "normal")
+        ai_widget = self._login_vars.get("ai_side")
+        if ai_widget is not None:
+            ai_widget.configure(state="readonly" if is_ai else "disabled")
+        if hasattr(self, "join_btn"):
+            self.join_btn.config(text="开始 AI 对战" if is_ai else "加入房间")
+
     def _on_join_room(self) -> None:
+        mode = self.mode_var.get()
+        if mode == "AI 对战":
+            self._start_ai_game()
+            return
+
         self._set_join_enabled(False)
         self._set_login_status("")
 
@@ -462,6 +529,138 @@ class GomokuClientUI:
         ok = self.network.connect(host, port)
         if not ok and not self.network.connected:
             self._set_join_enabled(True)
+
+    def _start_ai_game(self) -> None:
+        name = self._login_vars["name"].get().strip()
+        if not name:
+            self._set_login_status("请输入玩家名称")
+            return
+        if len(name) > 20:
+            self._set_login_status("玩家名称过长 (最多20字符)")
+            return
+
+        self.mode = "ai"
+        self.player_name = name
+        self.room_id = "AI"
+        self.my_side = BLACK if self.ai_side_var.get() == "我执黑" else WHITE
+        self.ai_side = WHITE if self.my_side == BLACK else BLACK
+        self.local_game = GomokuGame(board_size=BOARD_SIZE)
+        self._ai_pending = False
+        self.game_ended = False
+        self.restart_waiting = False
+
+        self.black_name = self.player_name if self.my_side == BLACK else "AI"
+        self.white_name = "AI" if self.my_side == WHITE else self.player_name
+        self.room_label.config(text="AI 对战")
+        self.black_name_var.set(self.black_name)
+        self.white_name_var.set(self.white_name)
+        self.black_tag_var.set("（我）" if self.my_side == BLACK else "")
+        self.white_tag_var.set("（我）" if self.my_side == WHITE else "")
+        self.board.set_my_side(self.my_side)
+        self.board.set_current_side(BLACK)
+        self.board.set_enabled(self.my_side == BLACK)
+        self.board.clear_board()
+        self.turn_var.set("等待中")
+        self.status_var.set("AI 对战已开始")
+        self._show_view(GAME_VIEW)
+
+        if self.ai_side == BLACK:
+            self._schedule_ai_move()
+
+    def _schedule_ai_move(self) -> None:
+        if self.mode != "ai":
+            return
+        if self.local_game is None or self.local_game.game_over:
+            return
+        if self._ai_pending:
+            return
+        if self.local_game.current_player != self.ai_side:
+            return
+        self._ai_pending = True
+        self.root.after(500, self._do_ai_move)
+
+    def _do_ai_move(self) -> None:
+        self._ai_pending = False
+        if self.mode != "ai" or self.local_game is None or self.local_game.game_over:
+            return
+        if self.local_game.current_player != self.ai_side:
+            return
+
+        board = [row[:] for row in self.local_game.board]
+        move = self._ai_player.choose_move(board, self.ai_side, self.my_side)
+        if move is None:
+            return
+
+        row, col = move
+        self._apply_local_move(row, col, self.ai_side)
+
+    def _apply_local_move(self, row: int, col: int, player: int) -> bool:
+        if self.local_game is None:
+            return False
+        ok = self.local_game.place(player, row, col)
+        if not ok:
+            return False
+
+        self.board.place_piece(row, col, player)
+        self.current_side = self.local_game.current_player
+        self.board.set_current_side(self.current_side)
+        self._update_turn_label()
+
+        if self.local_game.game_over:
+            self._finish_local_game()
+            return True
+
+        if self.mode == "ai":
+            if self.local_game.current_player == self.ai_side:
+                self.board.set_enabled(False)
+                self._schedule_ai_move()
+            else:
+                self.board.set_enabled(self.my_side == self.local_game.current_player)
+        return True
+
+    def _finish_local_game(self) -> None:
+        if self.local_game is None:
+            return
+        self.game_ended = True
+        self.board.set_enabled(False)
+        if self.local_game.is_draw:
+            self.turn_var.set("游戏结束")
+            self.status_var.set("和棋！")
+            self._log("AI 对战结束：和棋")
+            if self.root.winfo_viewable():
+                messagebox.showinfo("和棋", "AI 对战和棋！")
+            return
+
+        winner_side = self.local_game.winner
+        if winner_side == self.my_side:
+            self.turn_var.set("游戏结束")
+            self.status_var.set("你赢了！")
+            self._log("AI 对战结束：你赢了")
+            if self.root.winfo_viewable():
+                messagebox.showinfo("胜利", "你赢了这局 AI 对战！")
+        else:
+            self.turn_var.set("游戏结束")
+            self.status_var.set("AI 获胜")
+            self._log("AI 对战结束：AI 获胜")
+            if self.root.winfo_viewable():
+                messagebox.showinfo("失败", "AI 获胜，本局结束。")
+
+    def _on_board_move(self, row: int, col: int) -> None:
+        if self.mode == "ai":
+            if self.local_game is None:
+                return
+            if self.game_ended:
+                return
+            if self.local_game.current_player != self.my_side:
+                return
+            self._apply_local_move(row, col, self.my_side)
+            return
+
+        if self.game_ended:
+            return
+        side_str = "黑方" if self.my_side == 1 else "白方"
+        self._log(f"落子 ({row},{col}) {side_str}")
+        self.network.send_move(row, col)
 
     def _do_join_room(self) -> None:
         if not self.room_id or not self.player_name:
@@ -524,13 +723,6 @@ class GomokuClientUI:
         self.board.set_current_side(self.current_side)
         self.board.set_enabled(True)
 
-    def _on_board_move(self, row: int, col: int) -> None:
-        if self.game_ended:
-            return
-        side_str = "黑方" if self.my_side == 1 else "白方"
-        self._log(f"落子 ({row},{col}) {side_str}")
-        self.network.send_move(row, col)
-
     def _on_move_result(self, msg: dict) -> None:
         row = msg.get("row", -1)
         col = msg.get("col", -1)
@@ -580,12 +772,31 @@ class GomokuClientUI:
             messagebox.showinfo("和棋", "棋盘下满，双方和棋！")
 
     def _on_restart(self) -> None:
+        if self.mode == "ai":
+            self._restart_ai_game()
+            return
         if self.restart_waiting:
             return
         self.restart_waiting = True
         self.status_var.set("已申请重开，等待对方同意...")
         self._log("发送重新开始请求")
         self.network.send_restart_request()
+
+    def _restart_ai_game(self) -> None:
+        self.local_game = GomokuGame(board_size=BOARD_SIZE)
+        self._ai_pending = False
+        self.game_ended = False
+        self.restart_waiting = False
+        self.current_side = BLACK
+        self.board.clear_board()
+        self.board.set_my_side(self.my_side)
+        self.board.set_current_side(BLACK)
+        self.board.set_enabled(self.my_side == BLACK)
+        self.status_var.set("AI 对战已重新开始")
+        self._log("AI 对战已重新开始")
+        self._update_turn_label()
+        if self.ai_side == BLACK:
+            self._schedule_ai_move()
 
     def _on_restart_response(self, msg: dict) -> None:
         if msg.get("agreed"):
@@ -618,13 +829,19 @@ class GomokuClientUI:
 
     def _return_to_login(self) -> None:
         self.network.disconnect()
+        self.mode = "online"
+        self.local_game = None
+        self._ai_pending = False
         self.room_id = ""
         self.my_side = 0
+        self.ai_side = 0
         self.black_name = ""
         self.white_name = ""
         self.current_side = 1
         self.game_ended = False
         self.restart_waiting = False
+        self.mode_var.set("联机对战")
+        self.ai_side_var.set("我执黑")
         self.black_name_var.set("等待中")
         self.white_name_var.set("等待中")
         self.black_tag_var.set("")
@@ -633,6 +850,7 @@ class GomokuClientUI:
         self.status_var.set("等待对手加入...")
         self.board.clear_board()
         self.board.set_enabled(False)
+        self._sync_mode_ui()
         self._set_login_status("")
         self._set_join_enabled(True)
         self._show_view(LOGIN_VIEW)
