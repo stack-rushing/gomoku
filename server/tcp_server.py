@@ -43,12 +43,10 @@ from server.room_manager import Room, RoomManager
 
 
 class SafeConnection:
-    _write_lock = threading.Lock()
-
     @classmethod
-    def send_safe(cls, conn: socket.socket, data: bytes) -> None:
+    def send_safe(cls, conn: socket.socket, data: bytes, write_lock: threading.Lock) -> None:
         try:
-            with cls._write_lock:
+            with write_lock:
                 conn.sendall(data)
         except (BrokenPipeError, ConnectionResetError, OSError):
             raise
@@ -71,14 +69,14 @@ class ClientHandler:
         self.running = True
         self.buffer = MessageBuffer()
         self.last_recv = time.time()
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def send(self, message: dict) -> None:
         with self._lock:
             if not self.running:
                 return
             try:
-                SafeConnection.send_safe(self.conn, encode_message(message))
+                SafeConnection.send_safe(self.conn, encode_message(message), self._lock)
             except Exception as e:
                 logger.warning(f"[TCP] 发送失败 {self.addr}: {e}")
                 self.stop()
@@ -329,22 +327,18 @@ class ClientHandler:
             self.server.unregister_session(self.session_id)
         if self.room_id and self.session_id:
             rm = self.server.room_manager
+            room = rm.get_room(self.room_id)
+            if room and not room.game_ended and room.game_id and room.game.get_result() == RESULT_ONGOING:
+                winner_str = PLAYER_WHITE if self.side == BLACK else PLAYER_BLACK
+                result = RESULT_WIN_WHITE if self.side == BLACK else RESULT_WIN_BLACK
+                ended_at = time.time()
+                self.server.database.end_game(room.game_id, result, winner_str, room.game.move_history, ended_at)
             room = rm.leave_room(self.room_id, self.session_id)
-            if room and not room.game_ended and not room.is_empty():
+            if room and not room.is_empty():
                 rm.broadcast(self.room_id, build_player_left())
-                if room.game_id and room.game.get_result() == RESULT_ONGOING:
-                    winner_str = PLAYER_WHITE if self.side == 1 else PLAYER_BLACK
-                    result = RESULT_WIN_WHITE if self.side == 1 else RESULT_WIN_BLACK
-                    room.game_ended = True
-                    room.game_ended_at = time.time()
-                    room.result = result
-                    self.server.database.end_game(
-                        room.game_id,
-                        result,
-                        winner_str,
-                        room.game.move_history,
-                        room.game_ended_at,
-                    )
+                remaining_player = next(iter(room.players.values()))
+                remaining_side = PLAYER_BLACK if remaining_player.side == BLACK else PLAYER_WHITE
+                rm.send_to_player(self.room_id, remaining_player.session_id, build_room_joined(self.room_id, remaining_side))
 
 
 class TCPServer:
