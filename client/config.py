@@ -1,0 +1,27 @@
+from __future__ import annotations
+
+import os
+
+SERVER_HOST = os.environ.get("GOMOKU_CLIENT_HOST", "127.0.0.1")
+SERVER_PORT = int(os.environ.get("GOMOKU_CLIENT_PORT", "8888"))
+
+BOARD_SIZE = int(os.environ.get("GOMOKU_CLIENT_BOARD_SIZE", "15"))
+
+CELL_SIZE = 36
+MARGIN = 32
+PADDING = 20
+
+CANVAS_SIZE = (BOARD_SIZE - 1) * CELL_SIZE + MARGIN * 2
+
+BLACK_COLOR = "#1f2937"
+WHITE_COLOR = "#f8fafc"
+BOARD_COLOR = "#d4a574"
+GRID_COLOR = "#8b5a2b"
+LAST_MARK_COLOR = "#ef4444"
+HOVER_COLOR = "#fbbf24"
+
+APP_TITLE = "五子棋联机版"
+
+RECV_TIMEOUT = 30
+PING_INTERVAL = 20
+UI_POLL_INTERVAL = 50

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>五子棋服务器管理</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="container">
+    <header>
+        <h1>五子棋联机服务器管理面板</h1>
+        <p class="subtitle">Gomoku Multiplayer Server Dashboard</p>
+    </header>
+
+    <section class="status-section">
+        <div class="card status-card" id="statusCard">
+            <div class="status-indicator"></div>
+            <h2>服务器状态</h2>
+            <div class="status-grid">
+                <div class="status-item">
+                    <span class="label">运行状态</span>
+                    <span class="value" id="statusValue">加载中...</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">TCP 地址</span>
+                    <span class="value" id="tcpAddr">-</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">在线会话</span>
+                    <span class="value highlight" id="sessionsCount">0</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">房间数量</span>
+                    <span class="value highlight" id="roomsCount">0</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">进行中游戏</span>
+                    <span class="value highlight" id="activeGames">0</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">历史对局</span>
+                    <span class="value" id="historyCount">0</span>
+                </div>
+                <div class="status-item wide">
+                    <span class="label">运行时间</span>
+                    <span class="value" id="uptimeText">-</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="stats-section">
+        <div class="card">
+            <h2>对局统计</h2>
+            <div class="stats-grid">
+                <div class="stat-item stat-black">
+                    <div class="stat-value" id="blackWins">0</div>
+                    <div class="stat-label">黑方胜</div>
+                </div>
+                <div class="stat-item stat-white">
+                    <div class="stat-value" id="whiteWins">0</div>
+                    <div class="stat-label">白方胜</div>
+                </div>
+                <div class="stat-item stat-draw">
+                    <div class="stat-value" id="draws">0</div>
+                    <div class="stat-label">和棋</div>
+                </div>
+                <div class="stat-item stat-total">
+                    <div class="stat-value" id="totalGames">0</div>
+                    <div class="stat-label">总局数</div>
+                </div>
+            </div>
+            <div class="total-moves">
+                <span>总落子数：</span>
+                <strong id="totalMoves">0</strong>
+            </div>
+        </div>
+    </section>
+
+    <div class="two-col">
+        <section class="rooms-section">
+            <div class="card">
+                <div class="card-header">
+                    <h2>房间列表</h2>
+                    <span class="count-badge" id="roomsBadge">0</span>
+                </div>
+                <div class="rooms-list" id="roomsList">
+                    <p class="empty">暂无房间</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="players-section">
+            <div class="card">
+                <div class="card-header">
+                    <h2>在线玩家</h2>
+                    <span class="count-badge" id="playersBadge">0</span>
+                </div>
+                <div class="players-list" id="playersList">
+                    <p class="empty">暂无玩家</p>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <section class="recent-section">
+        <div class="card">
+            <h2>最近对局</h2>
+            <div class="table-wrap">
+                <table class="games-table" id="gamesTable">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>房间号</th>
+                            <th>黑方</th>
+                            <th>白方</th>
+                            <th>开始时间</th>
+                            <th>对局数</th>
+                            <th>结果</th>
+                        </tr>
+                    </thead>
+                    <tbody id="gamesBody">
+                        <tr><td colspan="7" class="empty-cell">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <p>最后更新：<span id="lastUpdate">-</span></p>
+    </footer>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
