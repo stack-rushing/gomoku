@@ -21,31 +21,33 @@ class MessageBuffer:
     """TCP 粘包/拆包处理的接收缓冲区"""
 
     def __init__(self) -> None:
-        self._buffer = ""
+        self._buffer = b""
 
     def feed(self, data: bytes) -> None:
         """将收到的字节数据追加到缓冲区"""
-        try:
-            self._buffer += data.decode("utf-8")
-        except UnicodeDecodeError:
-            pass
+        self._buffer += data
 
     def extract_messages(self) -> Tuple[List[dict], List[str]]:
         """
         从缓冲区提取完整消息。
         返回 (解析成功的消息列表, 解析失败的原始行列表)
         """
-        if "\n" not in self._buffer:
+        if b"\n" not in self._buffer:
             return [], []
 
-        lines = self._buffer.split("\n")
+        lines = self._buffer.split(b"\n")
         self._buffer = lines[-1]
 
         messages: List[dict] = []
         failed_lines: List[str] = []
 
-        for line in lines[:-1]:
-            if not line.strip():
+        for raw_line in lines[:-1]:
+            if not raw_line.strip():
+                continue
+            try:
+                line = raw_line.decode("utf-8")
+            except UnicodeDecodeError:
+                failed_lines.append(raw_line.decode("utf-8", errors="replace"))
                 continue
             msg = decode_message(line)
             if msg is not None:
