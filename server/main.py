@@ -81,6 +81,7 @@ def main() -> int:
 
     try:
         while running:
+            room_manager.cleanup_empty_rooms()
             time.sleep(1)
     except KeyboardInterrupt:
         logger.info("键盘中断，正在关闭...")
