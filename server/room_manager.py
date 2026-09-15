@@ -136,6 +136,7 @@ class RoomManager:
         player_name: str,
         conn: Any,
         addr: Tuple[str, int],
+        send_lock: Optional[Any] = None,
     ) -> Tuple[Optional[PlayerSession], Optional[Room], bool]:
         with self._lock:
             room = self.get_or_create_room(room_id)
@@ -157,6 +158,7 @@ class RoomManager:
                 side=side,
                 conn=conn,
                 addr=addr,
+                send_lock=send_lock or threading.Lock(),
             )
             room.players[session_id] = player
             room.empty_since = None
