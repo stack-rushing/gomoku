@@ -125,6 +125,17 @@ class TestMessageBuffer(unittest.TestCase):
         self.assertEqual(len(msgs), 1)
         self.assertEqual(msgs[0]["name"], "玩家黑")
 
+    def test_unicode_message_split_inside_utf8_character(self) -> None:
+        buf = MessageBuffer()
+        data = '{"name":"玩家黑"}'.encode("utf-8") + b"\n"
+        split_at = data.index("玩".encode("utf-8")) + 1
+        buf.feed(data[:split_at])
+        self.assertEqual(buf.extract_messages()[0], [])
+        buf.feed(data[split_at:])
+        messages, failed = buf.extract_messages()
+        self.assertEqual(messages, [{"name": "玩家黑"}])
+        self.assertEqual(failed, [])
+
 
 class TestBuilders(unittest.TestCase):
     def test_build_join_room(self) -> None:
